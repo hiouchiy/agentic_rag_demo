@@ -166,7 +166,6 @@ def extract_pages_text(pdf_path: str) -> List[Tuple[int, str]]:
 from transformers import AutoTokenizer
 import pysbd
 
-# AIモデルと同じトークナイザーを読み込む
 tokenizer = AutoTokenizer.from_pretrained("Alibaba-NLP/gte-large-en-v1.5")
 
 def chunk_text(text: str,
@@ -185,71 +184,44 @@ def chunk_text(text: str,
     戻り値:
         チャンク化されたテキストのリスト
     """
-    
-    # ステップ1: テキストを文単位に分割
-    segmenter = pysbd.Segmenter(language="en", clean=False)
+    # 文分割（日本語なら language="ja" に変更）
+    segmenter = pysbd.Segmenter(language="ja", clean=False)
     sentences = segmenter.segment(text)
-    
-    # ステップ2: 各文のトークン数を計算
-    sentence_token_ids = []
-    sentence_lengths = []
-    
-    for sentence in sentences:
-        # 文をトークンIDに変換（AIモデルが理解できる形式）
-        token_ids = tokenizer.encode(sentence, add_special_tokens=False)
-        sentence_token_ids.append(token_ids)
-        sentence_lengths.append(len(token_ids))
-    
-    # ステップ3: 文をチャンクにまとめる
+
+    # 各文トークン長を計測
+    sent_lens = [len(tokenizer.encode(sent, add_special_tokens=False)) for sent in sentences]
+
     chunks = []
-    current_chunk_sentences = []  # 現在のチャンクに含まれる文
-    current_token_count = 0       # 現在のチャンクのトークン数
-    
-    for sentence, token_length in zip(sentences, sentence_lengths):
-        # 短すぎる文はスキップ
-        if token_length < min_sentence_tokens:
+    current_chunk_sents = []
+    current_len = 0
+
+    for sent, slen in zip(sentences, sent_lens):
+        if slen < min_sentence_tokens:
             continue
-        
-        # 現在のチャンクに追加できるか確認
-        if current_token_count + token_length <= max_tokens:
-            # 追加可能：文をチャンクに追加
-            current_chunk_sentences.append(sentence)
-            current_token_count += token_length
+        if current_len + slen <= max_tokens:
+            current_chunk_sents.append(sent)
+            current_len += slen
         else:
-            # 追加不可：現在のチャンクを確定して新しいチャンクを開始
-            if current_chunk_sentences:
-                chunks.append("".join(current_chunk_sentences))
-            
-            # 新しいチャンクを開始
-            current_chunk_sentences = [sentence]
-            current_token_count = token_length
-    
-    # 最後のチャンクを追加
-    if current_chunk_sentences:
-        chunks.append("".join(current_chunk_sentences))
-    
-    # ステップ4: チャンク間にオーバーラップを追加
+            # 現チャンク確定
+            chunks.append("".join(current_chunk_sents))
+            # 新チャンク開始
+            current_chunk_sents = [sent]
+            current_len = slen
+
+    if current_chunk_sents:
+        chunks.append("".join(current_chunk_sents))
+
+    # オーバーラップ：文単位の重複
     final_chunks = []
-    
     for i, chunk in enumerate(chunks):
         if i == 0:
-            # 最初のチャンクはそのまま追加
             final_chunks.append(chunk)
         else:
-            # 2番目以降のチャンクには前のチャンクの一部を先頭に追加
-            previous_chunk = final_chunks[-1]
-            
-            # 前のチャンクの最後の部分を取得
-            previous_tokens = tokenizer.encode(previous_chunk, add_special_tokens=False)
-            overlap_token_ids = previous_tokens[-overlap_tokens:] if len(previous_tokens) >= overlap_tokens else previous_tokens
-            
-            # オーバーラップ部分を文字列に戻す
-            overlap_text = tokenizer.decode(overlap_token_ids)
-            
-            # オーバーラップ + 新しいチャンクを結合
-            combined_chunk = overlap_text + chunk
-            final_chunks.append(combined_chunk)
-    
+            # 前チャンク末尾の文を少し重複して先頭に追加
+            overlap_sent = chunks[i-1].split("。")[-1]  # 例：前チャンク最後の文
+            combined = overlap_sent + chunk
+            final_chunks.append(combined)
+
     return final_chunks
 
 # COMMAND ----------
